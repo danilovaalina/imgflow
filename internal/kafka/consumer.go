@@ -39,3 +39,7 @@ func (c *Consumer) Start(ctx context.Context, handler HandlerFunc) {
 		}
 	}
 }
+
+func (c *Consumer) Close() error {
+	return c.reader.Close()
+}

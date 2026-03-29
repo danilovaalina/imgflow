@@ -133,6 +133,17 @@ func (s *Service) DeleteImage(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
+// File достаёт поток байтов файла из хранилища.
+// Вызывающий код должен закрыть reader.
+func (s *Service) File(ctx context.Context, name string) (io.ReadCloser, error) {
+	reader, err := s.fileRepo.Get(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+
+	return reader, nil
+}
+
 // Process основной метод воркера для обработки изображения
 func (s *Service) Process(ctx context.Context, task model.ImageTask) error {
 	// Устанавливаем статус "В обработке"
@@ -225,7 +236,7 @@ func (s *Service) processImage(r io.Reader) (io.Reader, error) {
 	go func() {
 		defer pw.Close()
 		// Кодируем в JPEG и пишем прямо в Pipe
-		if err = imaging.Encode(pw, dst, imaging.JPEG); err != nil {
+		if err := imaging.Encode(pw, dst, imaging.JPEG); err != nil {
 			log.Error().Err(err).Msg("failed to encode image to pipe")
 		}
 	}()

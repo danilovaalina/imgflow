@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"io"
 	"net/http"
 
 	"imgflow/internal/model"
@@ -16,6 +17,7 @@ type Service interface {
 	UploadImage(ctx context.Context, params service.UploadImageOptions) (uuid.UUID, error)
 	Image(ctx context.Context, id uuid.UUID) (model.Image, error)
 	DeleteImage(ctx context.Context, id uuid.UUID) error
+	File(ctx context.Context, name string) (io.ReadCloser, error)
 }
 
 type API struct {
@@ -34,7 +36,8 @@ func New(service Service) *API {
 	a.POST("/upload", a.upload)
 	a.GET("/image/:id", a.image)
 	a.DELETE("/image/:id", a.delete)
-
+	a.GET("/images/:name", a.serveFile)
+	
 	return a
 }
 
@@ -97,6 +100,21 @@ func (a *API) delete(c echo.Context) error {
 	}
 
 	return c.NoContent(http.StatusNoContent)
+}
+
+func (a *API) serveFile(c echo.Context) error {
+	name := c.Param("name")
+
+	// Запрашиваем поток байтов у сервиса
+	reader, err := a.service.File(c.Request().Context(), name)
+	if err != nil {
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "file not found"})
+	}
+	defer func() { _ = reader.Close() }()
+
+	// Стримим данные напрямую в ответ.
+	// Content-Type можно определять динамически, но для начала хватит image/jpeg
+	return c.Stream(http.StatusOK, "image/jpeg", reader)
 }
 
 type taskResponse struct {

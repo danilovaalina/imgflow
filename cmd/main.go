@@ -27,30 +27,36 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	pool, err := postgres.Pool(ctx, cfg.DatabaseURL)
+	db, err := postgres.Pool(ctx, cfg.DatabaseURL)
 	if err != nil {
 		log.Fatal().Stack().Err(err).Send()
 	}
-	defer pool.Close()
+	defer db.Close()
 
-	zzz, err := minio.Client(cfg.MinIOEndpoint, cfg.MinIOAccessKey, cfg.MinIOSecretKey)
+	s3, err := minio.Client(cfg.MinIOEndpoint, cfg.MinIOAccessKey, cfg.MinIOSecretKey)
 	if err != nil {
-		log.Fatal().Err(err).Msg("failed to init minio")
+		log.Fatal().Stack().Err(err).Send()
 	}
 
-	producer := kafka.NewProducer(cfg.KafkaBrokers, cfg.KafkaTopic)
-	defer func() { _ = producer.Close() }()
-	p := client.NewPublisher(producer)
-	metaRepo := repository.NewMetadata(pool)
-	fileRepo := repository.NewFile(zzz, cfg.MinIOBucket)
-	s := service.New(metaRepo, fileRepo, p)
+	prod := kafka.NewProducer(cfg.KafkaBrokers, cfg.KafkaTopic)
+	defer func() { _ = prod.Close() }()
 
-	sbs := client.NewSubscriber(s)
-	consumer := kafka.NewConsumer(cfg.KafkaBrokers, cfg.KafkaTopic, cfg.KafkaGroupID)
-	consumer.Start(ctx, sbs.Handle)
+	cons := kafka.NewConsumer(cfg.KafkaBrokers, cfg.KafkaTopic, cfg.KafkaGroupID)
+	defer func() { _ = cons.Close() }()
 
-	a := api.New(s)
+	meta := repository.NewMetadata(db)
+	file := repository.NewFile(s3, cfg.MinIOBucket)
+
+	pub := client.NewPublisher(prod)
+	svc := service.New(meta, file, pub)
+	sub := client.NewSubscriber(svc)
+
+	go func() {
+		cons.Start(ctx, sub.Handle)
+	}()
+
+	a := api.New(svc)
 	if err = a.Start(cfg.Addr); err != nil {
-		log.Fatal().Err(err).Msg("server failed")
+		log.Fatal().Stack().Err(err).Send()
 	}
 }
