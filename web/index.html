@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ImgFlow Processor</title>
+    <style>
+        :root { --primary: #6366f1; --danger: #ef4444; --bg: #f8fafc; }
+        body { font-family: 'Inter', sans-serif; background: var(--bg); margin: 0; padding: 40px; color: #1e293b; }
+        .container { max-width: 900px; margin: 0 auto; }
+        h1 { color: var(--primary); text-transform: uppercase; letter-spacing: 2px; text-align: center; }
+
+        /* Форма загрузки */
+        .upload-card { background: white; padding: 24px; border-radius: 16px; shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+            margin-bottom: 40px; border-top: 4px solid var(--primary); display: flex; gap: 12px; align-items: center; }
+        input[type="file"] { flex-grow: 1; padding: 8px; border: 1px dashed #cbd5e1; border-radius: 8px; }
+
+        button { cursor: pointer; border: none; border-radius: 8px; font-weight: 600; transition: 0.2s; padding: 10px 20px; }
+        .btn-primary { background: var(--primary); color: white; }
+        .btn-primary:hover { background: #4f46e5; }
+        .btn-delete { background: #fee2e2; color: var(--danger); width: 100%; margin-top: 12px; }
+        .btn-delete:hover { background: #fecaca; }
+
+        /* Сетка галереи */
+        .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 24px; }
+        .card { background: white; padding: 16px; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
+        .img-container { width: 100%; height: 200px; background: #f1f5f9; border-radius: 8px; overflow: hidden;
+            display: flex; align-items: center; justify-content: center; position: relative; }
+        .img-container img { width: 100%; height: 100%; object-fit: cover; }
+
+        /* Анимация загрузки */
+        .loader { border: 3px solid #f3f3f3; border-top: 3px solid var(--primary); border-radius: 50%; width: 24px; height: 24px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>ImgFlow Processor</h1>
+
+    <div class="upload-card">
+        <input type="file" id="imageInput" accept=".jpg, .jpeg, .png, .webp, .gif">
+        <button onclick="uploadImage()" class="btn-primary">Загрузить</button>
+    </div>
+
+    <div id="gallery" class="gallery">
+        <!-- Карточки появятся здесь -->
+    </div>
+</div>
+
+<script>
+    async function uploadImage() {
+        const input = document.getElementById('imageInput');
+        if (!input.files[0]) return alert('Выберите файл!');
+
+        const formData = new FormData();
+        formData.append('image', input.files[0]);
+
+        const res = await fetch('/upload', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (data.id) {
+            input.value = '';
+            createCard(data.id);
+        }
+    }
+
+    function createCard(id) {
+        const gallery = document.getElementById('gallery');
+        const div = document.createElement('div');
+        div.id = `card-${id}`;
+        div.className = 'card';
+        div.innerHTML = `
+                <div class="img-container" id="status-${id}">
+                    <div class="loader"></div>
+                    <span style="margin-left: 10px; color: #64748b">Обработка...</span>
+                </div>
+                <button onclick="deleteImage('${id}')" class="btn-delete">Удалить</button>
+            `;
+        gallery.prepend(div);
+        poll(id);
+    }
+
+    async function poll(id) {
+        const interval = setInterval(async () => {
+            const res = await fetch(`/image/${id}`);
+            const data = await res.json();
+
+            if (data.status === 'completed') {
+                clearInterval(interval);
+
+                // Проверяем формат из ответа API
+                // Если это webp, готовим HTML для плашки
+                const badge = data.format === 'webp' ?
+                    `<div style="position:absolute; top:10px; right:10px; background:rgba(0,0,0,0.7); color:white; padding:4px 8px; border-radius:6px; font-size:10px; font-weight:bold; pointer-events:none; z-index:10;">WEBP → JPG</div>` : '';
+
+                const container = document.getElementById(`status-${id}`);
+                container.style.position = 'relative'; // Нужно для позиционирования плашки
+                container.innerHTML = `
+                ${badge}
+                <img src="${data.processed_url}" onclick="window.open('${data.processed_url}')" style="cursor:zoom-in; width:100%; height:100%; object-fit:cover;">
+            `;
+            } else if (data.status === 'failed') {
+                clearInterval(interval);
+                document.getElementById(`status-${id}`).innerText = 'Ошибка обработки';
+            }
+        }, 2000);
+    }
+
+    async function deleteImage(id) {
+        if (confirm('Удалить изображение?')) {
+            await fetch(`/image/${id}`, { method: 'DELETE' });
+            document.getElementById(`card-${id}`).remove();
+        }
+    }
+</script>
+</body>
+</html>

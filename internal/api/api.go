@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"path/filepath"
 
 	"imgflow/internal/model"
 	"imgflow/internal/service"
@@ -31,13 +32,13 @@ func New(service Service) *API {
 		service: service,
 	}
 
-	a.Static("/", "web")
+	a.File("/", "web/index.html")
 
 	a.POST("/upload", a.upload)
 	a.GET("/image/:id", a.image)
 	a.DELETE("/image/:id", a.delete)
 	a.GET("/images/:name", a.serveFile)
-	
+
 	return a
 }
 
@@ -47,17 +48,23 @@ func (a *API) upload(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, echo.Map{"error": "image file is required"})
 	}
 
+	format, ok := model.ParseFormat(filepath.Ext(file.Filename))
+	if !ok {
+		return c.JSON(http.StatusUnsupportedMediaType, echo.Map{"error": "bad format"})
+	}
+
 	src, err := file.Open()
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "failed to open file"})
 	}
-	defer src.Close()
+	defer func() { _ = src.Close() }()
 
 	id, err := a.service.UploadImage(c.Request().Context(), service.UploadImageOptions{
 		Filename:    file.Filename,
 		Content:     src,
 		Size:        file.Size,
 		ContentType: file.Header.Get("Content-Type"),
+		Format:      format,
 	})
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal server error"})
@@ -72,7 +79,7 @@ func (a *API) image(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, "invalid uuid")
 	}
 
-	task, err := a.service.Image(c.Request().Context(), id)
+	image, err := a.service.Image(c.Request().Context(), id)
 	if err != nil {
 		if errors.Is(err, model.ErrNotFound) {
 			return c.JSON(http.StatusNotFound, echo.Map{"error": "image not found"})
@@ -81,7 +88,7 @@ func (a *API) image(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal server error"})
 	}
 
-	return c.JSON(http.StatusOK, a.taskToResponse(task))
+	return c.JSON(http.StatusOK, a.imageToResponse(image))
 }
 
 func (a *API) delete(c echo.Context) error {
@@ -117,18 +124,20 @@ func (a *API) serveFile(c echo.Context) error {
 	return c.Stream(http.StatusOK, "image/jpeg", reader)
 }
 
-type taskResponse struct {
+type imageResponse struct {
 	ID           string `json:"id"`
 	Status       string `json:"status"`
+	Format       string `json:"format"`
 	OriginalURL  string `json:"original_url,omitempty"`
 	ProcessedURL string `json:"processed_url,omitempty"`
 }
 
-func (a *API) taskToResponse(t model.Image) taskResponse {
-	return taskResponse{
-		ID:           t.ID.String(),
-		Status:       string(t.Status),
-		OriginalURL:  t.OriginalURL,
-		ProcessedURL: t.ProcessedURL,
+func (a *API) imageToResponse(image model.Image) imageResponse {
+	return imageResponse{
+		ID:           image.ID.String(),
+		Status:       string(image.Status),
+		Format:       string(image.Format),
+		OriginalURL:  image.OriginalURL,
+		ProcessedURL: image.ProcessedURL,
 	}
 }

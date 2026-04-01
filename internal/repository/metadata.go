@@ -28,13 +28,14 @@ func NewMetadata(pool *pgxpool.Pool) *Metadata {
 type CreateImageOptions struct {
 	ID       uuid.UUID
 	Filename string
+	Format   model.ImageFormat
 	Status   model.ImageStatus
 	Created  time.Time
 }
 
 func (r *Metadata) CreateImage(ctx context.Context, opts CreateImageOptions) error {
-	query := `insert into images (id, filename, status, created) values ($1, $2, $3, $4)`
-	_, err := r.pool.Exec(ctx, query, opts.ID, opts.Filename, opts.Status, opts.Created)
+	query := `insert into images (id, filename, format, status, created) values ($1, $2, $3, $4, $5)`
+	_, err := r.pool.Exec(ctx, query, opts.ID, opts.Filename, opts.Format, opts.Status, opts.Created)
 	return errors.WithStack(err)
 }
 
@@ -76,7 +77,7 @@ func (r *Metadata) UpdateStatus(ctx context.Context, opts UpdateImageOptions) er
 
 func (r *Metadata) Image(ctx context.Context, id uuid.UUID) (model.Image, error) {
 	query := `
-		select id, filename, status, original_url, processed_url, created 
+		select id, filename, format, status, original_url, processed_url, created 
 		from images 
 		where id = $1
 	`
@@ -116,6 +117,7 @@ func (r *Metadata) imageModel(row imageRow) model.Image {
 	return model.Image{
 		ID:           row.ID,
 		Filename:     row.Filename,
+		Format:       model.ImageFormat(row.Format),
 		Status:       model.ImageStatus(row.Status),
 		OriginalURL:  row.OriginalURL,
 		ProcessedURL: row.ProcessedURL,
@@ -126,6 +128,7 @@ func (r *Metadata) imageModel(row imageRow) model.Image {
 type imageRow struct {
 	ID           uuid.UUID `db:"id"`
 	Filename     string    `db:"filename"`
+	Format       string    `db:"format"`
 	Status       string    `db:"status"`
 	OriginalURL  string    `db:"original_url"`
 	ProcessedURL string    `db:"processed_url"`

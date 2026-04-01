@@ -6,7 +6,6 @@ import (
 	"os/signal"
 	"syscall"
 
-	"imgflow/internal/api"
 	"imgflow/internal/client"
 	"imgflow/internal/config"
 	"imgflow/internal/db/minio"
@@ -33,13 +32,15 @@ func main() {
 	}
 	defer db.Close()
 
-	s3, err := minio.Client(cfg.MinIOEndpoint, cfg.MinIOAccessKey, cfg.MinIOSecretKey)
+	s3, err := minio.Client(minio.ClientOptions{
+		Endpoint:  cfg.MinIOEndpoint,
+		AccessKey: cfg.MinIOAccessKey,
+		SecretKey: cfg.MinIOSecretKey,
+		Bucket:    cfg.MinIOBucket,
+	})
 	if err != nil {
 		log.Fatal().Stack().Err(err).Send()
 	}
-
-	prod := kafka.NewProducer(cfg.KafkaBrokers, cfg.KafkaTopic)
-	defer func() { _ = prod.Close() }()
 
 	cons := kafka.NewConsumer(cfg.KafkaBrokers, cfg.KafkaTopic, cfg.KafkaGroupID)
 	defer func() { _ = cons.Close() }()
@@ -47,16 +48,8 @@ func main() {
 	meta := repository.NewMetadata(db)
 	file := repository.NewFile(s3, cfg.MinIOBucket)
 
-	pub := client.NewPublisher(prod)
-	svc := service.New(meta, file, pub)
+	svc := service.New(meta, file, nil)
 	sub := client.NewSubscriber(svc)
 
-	go func() {
-		cons.Start(ctx, sub.Handle)
-	}()
-
-	a := api.New(svc)
-	if err = a.Start(cfg.Addr); err != nil {
-		log.Fatal().Stack().Err(err).Send()
-	}
+	cons.Start(ctx, sub.Handle)
 }

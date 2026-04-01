@@ -1,12 +1,50 @@
 services:
+  api:
+    build:
+      context: .
+      args:
+        SERVICE_NAME: api
+    container_name: api
+    ports:
+      - "8080:8080"
+    environment:
+      - DB_URL=postgres://${DB_USER}:${DB_PASS}@postgres:5432/${DB_NAME}?sslmode=disable
+      - KAFKA_BROKERS=kafka:9094
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_USER}
+      - MINIO_SECRET_KEY=${MINIO_PASS}
+    depends_on:
+      - postgres
+      - kafka
+      - minio
+    networks:
+      - internal
+  worker:
+    build:
+      context: .
+      args:
+        SERVICE_NAME: worker
+    container_name: worker
+    environment:
+      - DB_URL=postgres://${DB_USER}:${DB_PASS}@postgres:5432/{DB_NAME}?sslmode=disable
+      - KAFKA_BROKERS=kafka:9094
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_USER}
+      - MINIO_SECRET_KEY=${MINIO_PASS}
+    depends_on:
+      - postgres
+      - kafka
+      - minio
+    networks:
+      - internal
   # База данных
   postgres:
     image: postgres:17
     container_name: db
     environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: imgflow_db
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASS}
+      POSTGRES_DB: ${DB_NAME}
     ports:
       - "5435:5432"
     volumes:
@@ -23,8 +61,8 @@ services:
       - "9000:9000" # API
       - "9001:9001" # Web UI
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: ${MINIO_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_PASS}
     command: server /data --console-address ":9001"
     volumes:
       - minio_data:/data
@@ -58,7 +96,7 @@ services:
       - "8085:8080"
     environment:
       - KAFKA_CLUSTERS_0_NAME=local
-      - KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=kafka:9094 # Теперь через CLIENT
+      - KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=kafka:9094
     depends_on:
       - kafka
 volumes:

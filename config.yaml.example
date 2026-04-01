@@ -1,0 +1,17 @@
+# Сетевой адрес API
+addr: ":8080"
+
+# Подключение к базе (локальное или докер)
+db_url: "postgres://user:password@localhost:5432/imgflow_db?sslmode=disable"
+
+# Настройки MinIO (S3)
+minio_endpoint: "localhost:9000"
+minio_access_key: "minioadmin"
+minio_secret_key: "minioadmin"
+minio_bucket: "images"
+
+# Настройки Kafka
+kafka_brokers:
+  - "localhost:9092"
+kafka_topic: "image_tasks"
+kafka_group_id: "image_worker_group"

@@ -13,6 +13,8 @@ import (
 	"github.com/disintegration/imaging"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
+
+	_ "golang.org/x/image/webp"
 )
 
 type MetadataRepository interface {
@@ -30,6 +32,12 @@ type FileRepository interface {
 
 type Queue interface {
 	Publish(ctx context.Context, msg model.ImageTask) error
+}
+
+type Options struct {
+	metadataRepo MetadataRepository
+	fileRepo     FileRepository
+	queue        Queue
 }
 
 type Service struct {
@@ -51,6 +59,7 @@ type UploadImageOptions struct {
 	Content     io.Reader
 	Size        int64
 	ContentType string
+	Format      model.ImageFormat
 }
 
 func (s *Service) UploadImage(ctx context.Context, opts UploadImageOptions) (uuid.UUID, error) {
@@ -71,6 +80,7 @@ func (s *Service) UploadImage(ctx context.Context, opts UploadImageOptions) (uui
 	err = s.metadataRepo.CreateImage(ctx, repository.CreateImageOptions{
 		ID:       id,
 		Filename: opts.Filename,
+		Format:   opts.Format,
 		Status:   model.StatusPending,
 		Created:  time.Now(),
 	})
@@ -81,7 +91,8 @@ func (s *Service) UploadImage(ctx context.Context, opts UploadImageOptions) (uui
 	// Отправляем ID задачи в Kafka
 	err = s.queue.Publish(ctx, model.ImageTask{
 		ID:       id,
-		Filename: objectName, // Передаем имя объекта, чтобы воркер знал, что скачивать
+		Filename: objectName,
+		Format:   opts.Format,
 	})
 	if err != nil {
 		log.Error().Err(err).Send()
@@ -158,30 +169,24 @@ func (s *Service) Process(ctx context.Context, task model.ImageTask) error {
 
 	// Получаем оригинал из MinIO
 	// Имя файла мы формировали при загрузке: ID_Filename
-	objectName := task.ID.String() + "_" + task.Filename
+	objectName := task.Filename
 	reader, err := s.fileRepo.Get(ctx, objectName)
 	if err != nil {
-		err = s.metadataRepo.UpdateStatus(ctx, repository.UpdateImageOptions{
+		_ = s.metadataRepo.UpdateStatus(ctx, repository.UpdateImageOptions{
 			ID:     task.ID,
 			Status: model.StatusFailed,
 		})
-		if err != nil {
-			return err
-		}
 		return err
 	}
 	defer func() { _ = reader.Close() }()
 
 	// Обработка (Resize + Watermark)
-	processedReader, err := s.processImage(reader)
+	result, err := s.processImage(reader, task.Format)
 	if err != nil {
-		err = s.metadataRepo.UpdateStatus(ctx, repository.UpdateImageOptions{
+		_ = s.metadataRepo.UpdateStatus(ctx, repository.UpdateImageOptions{
 			ID:     task.ID,
 			Status: model.StatusFailed,
 		})
-		if err != nil {
-			return err
-		}
 		return err
 	}
 
@@ -189,8 +194,8 @@ func (s *Service) Process(ctx context.Context, task model.ImageTask) error {
 	procObjectName := "proc_" + objectName
 	err = s.fileRepo.Put(ctx, repository.PutOptions{
 		ObjectName:  procObjectName,
-		Reader:      processedReader,
-		ContentType: "image/jpeg",
+		Reader:      result.Reader,
+		ContentType: result.ContentType,
 	})
 	if err != nil {
 		return err
@@ -215,11 +220,16 @@ func (s *Service) Process(ctx context.Context, task model.ImageTask) error {
 	return nil
 }
 
-func (s *Service) processImage(r io.Reader) (io.Reader, error) {
+type ProcessedImage struct {
+	Reader      io.Reader
+	ContentType string
+}
+
+func (s *Service) processImage(r io.Reader, format model.ImageFormat) (ProcessedImage, error) {
 	// Декодируем изображение
 	src, err := imaging.Decode(r)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return ProcessedImage{}, errors.WithStack(err)
 	}
 
 	// Ресайз: уменьшаем до 800px по ширине с сохранением пропорций
@@ -227,19 +237,40 @@ func (s *Service) processImage(r io.Reader) (io.Reader, error) {
 
 	// Водяной знак: для примера сделаем небольшое размытие краев
 	// или наложим полупрозрачный фильтр (имитация watermark)
-	// В реальной задаче здесь можно использовать imaging.Overlay для логотипа
 	dst = imaging.PasteCenter(dst, imaging.Grayscale(imaging.Thumbnail(src, 100, 100, imaging.Lanczos)))
 
 	// Используем Pipe для передачи результата без лишнего буфера в памяти
 	pr, pw := io.Pipe()
 
+	contentType := "image/jpeg"
+	switch format {
+	case model.FormatPNG:
+		contentType = "image/png"
+	case model.FormatGIF:
+		contentType = "image/gif"
+	}
+
 	go func() {
-		defer pw.Close()
-		// Кодируем в JPEG и пишем прямо в Pipe
-		if err := imaging.Encode(pw, dst, imaging.JPEG); err != nil {
+		defer func() { _ = pw.Close() }()
+
+		switch format {
+		case model.FormatPNG:
+			err = imaging.Encode(pw, dst, imaging.PNG)
+		case model.FormatGIF:
+			err = imaging.Encode(pw, dst, imaging.GIF)
+		default:
+			err = imaging.Encode(pw, dst, imaging.JPEG)
+		}
+
+		if err != nil {
 			log.Error().Err(err).Msg("failed to encode image to pipe")
+		} else {
+			log.Info().Msg("image successfully encoded to pipe")
 		}
 	}()
 
-	return pr, nil
+	return ProcessedImage{
+		Reader:      pr,
+		ContentType: contentType,
+	}, nil
 }

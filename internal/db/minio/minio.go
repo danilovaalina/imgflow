@@ -8,19 +8,33 @@ import (
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
-func Client(endpoint, accessKey, secretKey string) (*minio.Client, error) {
-	client, err := minio.New(endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(accessKey, secretKey, ""),
+type ClientOptions struct {
+	Endpoint  string
+	AccessKey string
+	SecretKey string
+	Bucket    string
+}
+
+func Client(opts ClientOptions) (*minio.Client, error) {
+	client, err := minio.New(opts.Endpoint, &minio.Options{
+		Creds:  credentials.NewStaticV4(opts.AccessKey, opts.SecretKey, ""),
 		Secure: false, // ставим true, если есть SSL
 	})
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 
-	// Проверяем соединение через ListBuckets
-	_, err = client.ListBuckets(context.Background())
+	ctx := context.Background()
+	exists, err := client.BucketExists(ctx, opts.Bucket)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to connect to minio")
+		return nil, err
+	}
+
+	if !exists {
+		err = client.MakeBucket(ctx, opts.Bucket, minio.MakeBucketOptions{})
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return client, nil
